@@ -40,6 +40,7 @@ ALCHEMY_API_KEYS = os.getenv("ALCHEMY_KEYS", "").split(",")
 ALCHEMY_BASE_URL = "https://solana-mainnet.g.alchemy.com/v2/"
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 MAX_BLOCK_CONCURRENT_REQUESTS = len(ALCHEMY_API_KEYS) * 10
+RESET_DB_ON_START = os.getenv("RESET_DB_ON_START", "false").lower() == "true"
 
 ###############################################################################
 #                          PRICE FETCHER PROCESS
@@ -576,7 +577,8 @@ async def main_async(tx_queue):
 def main():
     # Setup DB
     conn = get_connection()
-    clear_database(conn)
+    if RESET_DB_ON_START:
+        clear_database(conn)
     setup_database(conn)
     conn.close()
 
