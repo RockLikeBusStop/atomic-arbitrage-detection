@@ -1,6 +1,5 @@
 import asyncio
 import aiohttp
-import json
 import itertools
 import time
 import os
@@ -13,7 +12,6 @@ from datetime import datetime
 from tqdm import tqdm
 
 # DB imports, etc.
-import psycopg2
 from db_operations import (
     get_connection,
     setup_database,
@@ -21,12 +19,8 @@ from db_operations import (
     insert_tokens,
     insert_transactions,
     insert_users,
-    get_total_profit,
-    get_average_profit,
-    get_top_10_transactions,
-    get_most_common_tokens_arbitraged,
-    get_top_10_users_by_profit,
 )
+import filters
 
 from solders.pubkey import Pubkey
 from spl.token.instructions import get_associated_token_address
@@ -207,8 +201,7 @@ def fetch_token_price_sync(mint_addresses, request_queue, response_dict):
 
 def check_destinations_signer_owned(token_accounts, token_balances, signer):
     """
-    (Unchanged from your original) Checks if all token_accounts are associated
-    token accounts for `signer`.
+    Checks if all token_accounts are associated token accounts for `signer`.
     """
     mint_addresses = set()
     for balance in token_balances:
@@ -224,85 +217,6 @@ def check_destinations_signer_owned(token_accounts, token_balances, signer):
     for token_account in token_accounts:
         if Pubkey.from_string(token_account) not in atas:
             return False
-
-    return True
-
-
-def is_multi_swap_arb(tx):
-    """
-    (Unchanged from your original) Heuristic check if a transaction looks like
-    a multi-swap arbitrage.
-    """
-    inner_ixs = tx.get("meta", {}).get("innerInstructions", [])
-    if not inner_ixs:
-        return False
-
-    swaps = []
-    for index in inner_ixs:
-        ixs = index.get("instructions", [])
-        if len(ixs) < 3:
-            continue
-        for i in range(len(ixs) - 2):
-            parsed0 = ixs[i]
-            parsed1 = ixs[i + 1].get("parsed")
-            parsed2 = ixs[i + 2].get("parsed")
-            if not all(isinstance(x, dict) for x in [parsed0, parsed1, parsed2]):
-                continue
-
-            if (
-                "transfer" in ixs[i + 1].get("parsed", {}).get("type", "").lower()
-                and "transfer" in ixs[i + 2].get("parsed", {}).get("type", "").lower()
-            ):
-                swaps.append([ixs[i], ixs[i + 1], ixs[i + 2]])
-
-    if len(swaps) < 2:
-        return False
-
-    signer = (
-        tx.get("transaction", {})
-        .get("message", {})
-        .get("accountKeys", [])[0]
-        .get("pubkey", "")
-    )
-    prev_destination = ""
-    receivers = []
-    swap_destinations = []
-
-    for swap in swaps:
-        if swap[1].get("parsed", {}).get("info", {}).get("authority", "") != signer:
-            return False
-        receiver = swap[1].get("parsed", {}).get("info", {}).get("destination", "")
-        if receiver != signer:
-            if receiver in receivers:
-                return False
-            receivers.append(receiver)
-        else:
-            return False
-
-        if prev_destination:
-            if (
-                swap[1].get("parsed", {}).get("info", {}).get("source", "")
-                != prev_destination
-            ):
-                return False
-
-        if swap[2].get("parsed", {}).get("info", {}).get("authority", "") == signer:
-            return False
-
-        destination = swap[2].get("parsed", {}).get("info", {}).get("destination", "")
-        if destination:
-            swap_destinations.append(destination)
-        prev_destination = destination
-
-    # Check if the starting and ending token are the same
-    start_token_account = (
-        swaps[0][1].get("parsed", {}).get("info", {}).get("source", "")
-    )
-    end_token_account = (
-        swaps[-1][2].get("parsed", {}).get("info", {}).get("destination", "")
-    )
-    if start_token_account != end_token_account:
-        return False
 
     return True
 
@@ -402,7 +316,7 @@ def transaction_consumer(
             user_rows = []
 
             for tx in tx_list:
-                if is_multi_swap_arb(tx):
+                if filters.is_multi_swap_arb(tx):
                     signature = tx.get("transaction", {}).get("signatures", [""])[0]
                     if slot == 0 and tx.get("slot"):
                         slot = tx.get("slot")
